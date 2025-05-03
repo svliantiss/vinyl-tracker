@@ -9,18 +9,18 @@ export default function BpmDisplay({
   isAnalyzing?: boolean;
   rawBpm?: number | null;
 }) {
-  // Format the BPM to show decimals only when available and non-zero
+  // Format the BPM to show as whole number without decimals
   const formatBpm = (value: number | null): string => {
     if (value === null) return '--';
     
-    // Always show 2 decimal places
-    return value.toFixed(2);
+    // Round to nearest whole number
+    return Math.round(value).toString();
   };
 
-  // Show the raw BPM with a prefix to indicate it's real-time
+  // Show the raw BPM with a prefix to indicate it's real-time, also as whole number
   const displayRawBpm = (value: number | null): string => {
     if (value === null) return '';
-    return `Live: ${value.toFixed(1)}`;
+    return `Live: ${Math.round(value)}`;
   };
 
   return (

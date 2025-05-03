@@ -84,12 +84,17 @@ const config: Config = {
             opacity: '0',
           },
         },
+        'marquee': {
+          '0%': { transform: 'translateX(0%)' },
+          '100%': { transform: 'translateX(-100%)' }
+        },
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
         'ping-slow': 'ping 2s cubic-bezier(0, 0, 0.2, 1) infinite',
         'ping-slower': 'ping 3s cubic-bezier(0, 0, 0.2, 1) infinite',
+        'marquee': 'marquee 10s linear infinite',
       },
     },
   },

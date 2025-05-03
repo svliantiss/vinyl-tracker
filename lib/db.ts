@@ -14,6 +14,9 @@ export interface Recording {
   hasLargeAudioBlob?: boolean; // Flag indicating if the audio blob was too large for storage
 }
 
+// Max audio size to store in localStorage (roughly 30 seconds of audio)
+const MAX_AUDIO_SIZE = 300000; // 300KB is a reasonable size for about 30 seconds
+
 export async function saveRecording(recording: Recording) {
   try {
     const existingData = localStorage.getItem(STORAGE_KEY);
@@ -22,19 +25,40 @@ export async function saveRecording(recording: Recording) {
     // Audio blob handling to prevent quota exceeded errors
     if (recording.audioBlob) {
       const blobSize = recording.audioBlob.length;
-      // If the blob is too large (over ~500KB), store metadata only and warn
-      if (blobSize > 500000) {
-        console.warn('Audio blob too large for localStorage, saving metadata only');
+
+      // Check if we need to trim the audio blob (if it's larger than our limit)
+      if (blobSize > MAX_AUDIO_SIZE) {
+        console.warn(`Audio blob (${Math.round(blobSize/1024)}KB) exceeds maximum size (${Math.round(MAX_AUDIO_SIZE/1024)}KB). Trimming to first 30 seconds.`);
         
-        // Create a version without audio data
-        const recordingWithoutAudio = {
-          ...recording,
-          createdAt: recording.createdAt.toISOString(),
-          audioBlob: undefined,
-          hasLargeAudioBlob: true // Flag to indicate audio was removed
-        };
-        
-        recordings.push(recordingWithoutAudio);
+        try {
+          // For data URLs, we just keep the first part of the content
+          // This is a simplified approach that keeps approximately the first 30 seconds
+          const trimmedBlob = recording.audioBlob.substring(0, MAX_AUDIO_SIZE);
+          
+          // Save with the trimmed audio
+          recordings.push({
+            ...recording,
+            createdAt: recording.createdAt.toISOString(),
+            audioBlob: trimmedBlob,
+            // Add a note that this was trimmed
+            name: recording.name + " (30s preview)"
+          });
+          
+          console.log('Saved recording with trimmed audio data');
+        } catch (trimError) {
+          console.error('Error trimming audio blob:', trimError);
+          
+          // Fallback: Save without audio
+          const recordingWithoutAudio = {
+            ...recording,
+            createdAt: recording.createdAt.toISOString(),
+            audioBlob: undefined,
+            hasLargeAudioBlob: true
+          };
+          
+          recordings.push(recordingWithoutAudio);
+          console.warn('Saved without audio due to trimming error');
+        }
       } else {
         // Regular saving with audio data if small enough
         recordings.push({
@@ -66,7 +90,8 @@ export async function saveRecording(recording: Recording) {
           ...recording,
           createdAt: recording.createdAt.toISOString(),
           audioBlob: undefined,
-          hasLargeAudioBlob: true
+          hasLargeAudioBlob: true,
+          name: recording.name + " (no audio)"
         };
         
         recordings.push(recordingWithoutAudio);

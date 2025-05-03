@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import RecordButton from './record-button';
 import WaveformVisualizer from './waveform-visualizer';
@@ -12,6 +12,7 @@ import { useAudioRecorder } from '@/hooks/use-audio-recorder';
 import { useAudioAnalyzer } from '@/hooks/use-audio-analyzer';
 import { Play, ListMusic, Camera, Save, X, Hand, RotateCcw, Home, ArrowLeft, Search, Image, Pause, Upload, Radio, PlusCircle } from 'lucide-react';
 import { saveRecording, saveArtist, getAllArtists } from '@/lib/db';
+import RecordingsView from './recordings-view';
 
 const MAX_RECORDING_TIME = 60; // 1 minute in seconds
 
@@ -41,6 +42,15 @@ const TAP_COLORS = [
 
 export default function BpmCounter() {
   const router = useRouter();
+  const [isDebugMode] = useState(false); // Set to true to enable debug logging
+  
+  // Debug logging utility
+  const debugLog = (...args: any[]) => {
+    if (isDebugMode) {
+      console.log(...args);
+    }
+  };
+  
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [recordingName, setRecordingName] = useState('');
@@ -54,6 +64,7 @@ export default function BpmCounter() {
   const [manualBpm, setManualBpm] = useState({ whole: '', decimal: '' });
   const [selectedKey, setSelectedKey] = useState<string>('');
   const [cardColor, setCardColor] = useState('');
+  const [showRecordings, setShowRecordings] = useState(false);
   
   // Audio refs
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -343,6 +354,11 @@ export default function BpmCounter() {
 
   // Memoize handleTap function
   const handleTap = useCallback(() => {
+    // Ignore rapid consecutive taps (debounce)
+    const now = Date.now();
+    const lastTap = tapTimes.length > 0 ? tapTimes[tapTimes.length - 1] : 0;
+    if (now - lastTap < 100) return; // Ignore taps that are too close together (100ms)
+    
     // Change tap color and trigger flash animation
     const randomColor = TAP_COLORS[Math.floor(Math.random() * TAP_COLORS.length)];
     setTapColor(randomColor);
@@ -353,7 +369,6 @@ export default function BpmCounter() {
       setTapFlash(false);
     }, 300);
     
-    const now = Date.now();
     setTapTimes(prev => {
       const newTimes = [...prev, now].filter(time => now - time < 5000);
       
@@ -363,43 +378,108 @@ export default function BpmCounter() {
           intervals.push(newTimes[i] - newTimes[i - 1]);
         }
         
-        const averageInterval = intervals.reduce((a, b) => a + b) / intervals.length;
-        const calculatedBpm = 60000 / averageInterval;
-        
-        // Simplified condition: Always accept the calculated tap BPM if valid
-        if (calculatedBpm > 0 && calculatedBpm < 400) { // Example: Basic validation
-          setTapBpm(calculatedBpm);
+        // If we have multiple intervals, filter out outliers
+        if (intervals.length > 2) {
+          // Calculate mean interval
+          const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+          // Filter out intervals that are too far from the mean (more than 50% deviation)
+          const filteredIntervals = intervals.filter(interval => 
+            Math.abs(interval - mean) / mean < 0.5
+          );
           
-          // Also update the manual BPM fields for saving
-          const [whole, decimal] = calculatedBpm.toFixed(2).split('.');
-          setManualBpm({ whole, decimal });
+          // If we have any intervals left after filtering
+          if (filteredIntervals.length > 0) {
+            const averageInterval = filteredIntervals.reduce((a, b) => a + b, 0) / filteredIntervals.length;
+            const calculatedBpm = 60000 / averageInterval;
+            
+            // Validate the BPM
+            if (calculatedBpm > 0 && calculatedBpm < 400) {
+              debugLog("New calculated BPM:", calculatedBpm);
+              setTapBpm(calculatedBpm);
+              
+              // Update the manual BPM fields for saving based on decimal mode
+              if (showDecimals) {
+                // When decimal mode is ON, save accurate decimal value
+                const [whole, decimal] = calculatedBpm.toFixed(2).split('.');
+                setManualBpm({ whole, decimal });
+              } else {
+                // When decimal mode is OFF, always use .00 for decimal part
+                const whole = Math.round(calculatedBpm).toString();
+                setManualBpm({ whole, decimal: '00' });
+              }
+            }
+          }
+        } else {
+          // Simple calculation for few intervals
+          const averageInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+          const calculatedBpm = 60000 / averageInterval;
+          
+          if (calculatedBpm > 0 && calculatedBpm < 400) {
+            debugLog("New calculated BPM:", calculatedBpm);
+            setTapBpm(calculatedBpm);
+            
+            // Update the manual BPM fields for saving based on decimal mode
+            if (showDecimals) {
+              // When decimal mode is ON, save accurate decimal value
+              const [whole, decimal] = calculatedBpm.toFixed(2).split('.');
+              setManualBpm({ whole, decimal });
+            } else {
+              // When decimal mode is OFF, always use .00 for decimal part
+              const whole = Math.round(calculatedBpm).toString();
+              setManualBpm({ whole, decimal: '00' });
+            }
+          }
         }
       }
       
       return newTimes;
     });
-  }, []);
+  }, [tapTimes, debugLog, showDecimals]);
 
   // Toggle decimal display
   const toggleDecimals = useCallback(() => {
-    setShowDecimals(prev => !prev);
-  }, []);
+    debugLog("Current showDecimals:", showDecimals);
+    setShowDecimals(prev => {
+      const newValue = !prev;
+      debugLog("Toggling showDecimals from", prev, "to", newValue);
+      
+      // Update manualBpm to match the new decimal display mode
+      if (tapBpm) {
+        if (newValue) {
+          // Turning ON decimals - use accurate value
+          const [whole, decimal] = tapBpm.toFixed(2).split('.');
+          setManualBpm({ whole, decimal });
+        } else {
+          // Turning OFF decimals - use rounded value with .00
+          const whole = Math.round(tapBpm).toString();
+          setManualBpm({ whole, decimal: '00' });
+        }
+      }
+      
+      return newValue;
+    });
+  }, [debugLog, showDecimals, tapBpm]);
 
-  const resetTapMode = () => {
+  const resetTapMode = useCallback(() => {
     setTapTimes([]);
     setTapBpm(null);
-  };
+    debugLog("Reset tap mode");
+  }, [debugLog]);
 
+  // Use separate event handlers for different input methods to prevent conflicts
   useEffect(() => {
-    // Only add keyboard listener in tap mode
     if (!isTapMode) return;
     
+    // Handle keyboard input
     const handleKeyDown = (e: KeyboardEvent) => {
       // Prevent repeated keydown events while key is held
       if (e.repeat) return;
       
       // Don't trigger for Escape key (which might be used to exit)
       if (e.key === 'Escape') return;
+      
+      // Don't handle events for modifier keys or Tab
+      if (['Shift', 'Control', 'Alt', 'Meta', 'Tab'].includes(e.key)) return;
       
       handleTap();
     };
@@ -410,6 +490,81 @@ export default function BpmCounter() {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isTapMode, handleTap]);
+
+  // Use separate handler for touch events
+  useEffect(() => {
+    if (!isTapMode) return;
+    
+    const tapContainer = document.getElementById('tap-container');
+    
+    if (!tapContainer) return;
+    
+    // For devices with touch support
+    const handleTouchStart = (e: TouchEvent) => {
+      // Always check the target to avoid handling events on buttons
+      const targetElement = e.target as HTMLElement;
+      const closestButton = targetElement.closest('button');
+      
+      // If the touch target is a button or within a button, don't handle the tap
+      if (targetElement.tagName === 'BUTTON' || 
+          closestButton ||
+          targetElement.tagName === 'A' || 
+          targetElement.closest('a') ||
+          targetElement.classList.contains('no-tap')) {
+        return; // Let the button's own click handler work
+      }
+      
+      e.preventDefault();
+      handleTap();
+    };
+    
+    tapContainer.addEventListener('touchstart', handleTouchStart, { passive: false });
+    
+    return () => {
+      tapContainer.removeEventListener('touchstart', handleTouchStart);
+    };
+  }, [isTapMode, handleTap]);
+
+  // Handle mouse clicks separately
+  useEffect(() => {
+    if (!isTapMode) return;
+    
+    const tapContainer = document.getElementById('tap-container');
+    
+    if (!tapContainer) return;
+    
+    // For devices with mouse
+    const handleMouseDown = (e: MouseEvent) => {
+      // Always check the target to avoid handling events on buttons
+      const targetElement = e.target as HTMLElement;
+      const closestButton = targetElement.closest('button');
+      
+      // If the click target is a button or within a button, don't handle the tap
+      if (targetElement.tagName === 'BUTTON' || 
+          closestButton ||
+          targetElement.tagName === 'A' || 
+          targetElement.closest('a') ||
+          targetElement.classList.contains('no-tap')) {
+        return; // Let the button's own click handler work
+      }
+      
+      e.preventDefault();
+      handleTap();
+    };
+    
+    tapContainer.addEventListener('mousedown', handleMouseDown);
+    
+    return () => {
+      tapContainer.removeEventListener('mousedown', handleMouseDown);
+    };
+  }, [isTapMode, handleTap]);
+
+  // Add an effect to recompute BPM display when showDecimals changes
+  useEffect(() => {
+    if (isTapMode && tapBpm) {
+      debugLog("showDecimals changed, current state:", showDecimals);
+    }
+  }, [showDecimals, isTapMode, tapBpm, debugLog]);
 
   // Provide a default BPM value if nothing is detected during recording
   const getDisplayValue = (value: number | null): string => {
@@ -515,59 +670,102 @@ export default function BpmCounter() {
     setArtist('');
   };
 
-  if (isTapMode) {
-    // Get BPM display value with appropriate formatting
-    const bpmDisplay = tapBpm 
-      ? (showDecimals ? tapBpm.toFixed(2) : Math.round(tapBpm).toString())
-      : "--";
+  // Get BPM display value with appropriate formatting - moved outside of conditionals to fix hooks error
+  const bpmDisplay = useMemo(() => {
+    if (!isTapMode || !tapBpm) return "--";
+    
+    // When decimals are shown, display with 2 decimal places
+    // When decimals are hidden, round to nearest whole number
+    return showDecimals ? tapBpm.toFixed(2) : Math.round(tapBpm).toString();
+  }, [tapBpm, showDecimals, isTapMode]);
 
-    // Handle saving the manually tapped BPM
-    const handleSaveTappedBpm = (e: React.MouseEvent) => {
-      e.stopPropagation(); // Prevent tap registration
-      
-      if (tapBpm) {
-        // Format BPM with up to 2 decimal places
+  // Create handlers outside of conditional rendering to maintain hooks order
+  const handleExitTapMode = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation(); // Prevent tap registration
+    setIsTapMode(false);
+  }, []);
+
+  const handleResetTap = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation(); // Prevent tap registration
+    resetTapMode();
+  }, [resetTapMode]);
+
+  const handleToggleDecimals = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation(); // Prevent tap registration
+    toggleDecimals();
+  }, [toggleDecimals]);
+
+  // Add navigation handler for recordings button
+  const handleNavigateToRecordings = useCallback(() => {
+    setShowRecordings(true);
+  }, []);
+  
+  const handleBackFromRecordings = useCallback(() => {
+    setShowRecordings(false);
+  }, []);
+
+  const handleSaveTappedBpm = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation(); // Prevent tap registration
+    
+    if (tapBpm) {
+      // Handle BPM differently based on decimal mode
+      if (showDecimals) {
+        // When decimal mode is ON, save accurate decimal value
         const [whole, decimal] = tapBpm.toFixed(2).split('.');
         setManualBpm({ whole, decimal });
-        
-        // Select a random key from MUSICAL_KEYS
-        const randomKeyIndex = Math.floor(Math.random() * MUSICAL_KEYS.length);
-        setSelectedKey(MUSICAL_KEYS[randomKeyIndex]);
-        
-        // Select a random color for the card
-        const randomColor = CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)];
-        setCardColor(randomColor);
-        
-        // Set default recording name
-        const now = new Date();
-        const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        setRecordingName(`Tapped BPM ${dateStr}`);
-        
-        // Ensure artist field is empty
-        setArtist('');
-        
-        // Show save dialog
-        setShowSaveDialog(true);
-        
-        // Exit tap mode
-        setIsTapMode(false);
+      } else {
+        // When decimal mode is OFF, always use .00 for decimal part
+        const whole = Math.round(tapBpm).toString();
+        setManualBpm({ whole, decimal: '00' });
       }
-    };
+      
+      // Select a random key from MUSICAL_KEYS
+      const randomKeyIndex = Math.floor(Math.random() * MUSICAL_KEYS.length);
+      setSelectedKey(MUSICAL_KEYS[randomKeyIndex]);
+      
+      // Select a random color for the card
+      const randomColor = CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)];
+      setCardColor(randomColor);
+      
+      // Set default recording name
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      setRecordingName(`Tapped BPM ${dateStr}`);
+      
+      // Ensure artist field is empty
+      setArtist('');
+      
+      // Show save dialog
+      setShowSaveDialog(true);
+      
+      // Exit tap mode
+      setIsTapMode(false);
+    }
+  }, [tapBpm, showDecimals, setManualBpm, setSelectedKey, setCardColor, setRecordingName, setArtist, setShowSaveDialog, setIsTapMode]);
 
+  if (showRecordings) {
+    return <RecordingsView onBack={handleBackFromRecordings} onNewRecording={handleBackFromRecordings} />;
+  }
+
+  if (isTapMode) {
+    debugLog("Tap BPM display:", { tapBpm, showDecimals, displayValue: bpmDisplay });
+
+    // Render tap mode UI without defining hooks inside conditional
     return (
       <div 
+        id="tap-container"
         className={`fixed inset-0 flex flex-col items-center justify-center p-4 transition-colors duration-300 ${
           tapFlash ? tapColor : 'bg-black'
         }`}
-        onClick={handleTap}
       >
         {/* Back button in top left */}
         <button
-          onClick={(e) => {
-            e.stopPropagation(); // Prevent tap registration
-            setIsTapMode(false);
-          }}
-          className="absolute top-4 left-4 w-12 h-12 rounded-full border border-white/10 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95 z-10"
+          onClick={handleExitTapMode}
+          className="absolute top-4 left-4 w-12 h-12 rounded-full border border-white/10 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95 z-20"
           aria-label="Back to home"
         >
           <Home className="w-5 h-5 text-white/90" />
@@ -575,50 +773,44 @@ export default function BpmCounter() {
         
         {/* Decimal toggle button */}
         <button
-          onClick={(e) => {
-            e.stopPropagation(); // Prevent tap registration
-            toggleDecimals();
-          }}
-          className="absolute top-4 right-20 w-12 h-12 rounded-full border border-white/10 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95 z-10"
+          onClick={handleToggleDecimals}
+          className={`absolute top-4 right-20 w-12 h-12 rounded-full border ${showDecimals ? 'border-orange-400' : 'border-white/10'} flex items-center justify-center ${showDecimals ? 'bg-orange-400/10' : 'bg-gray-900/30'} backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95 z-20`}
           aria-label="Toggle decimals"
         >
-          <span className="text-white/90 font-mono font-bold text-base">.00</span>
+          <span className={`font-mono font-bold text-base ${showDecimals ? 'text-orange-400' : 'text-white/90'}`}>.00</span>
         </button>
         
         {/* Reset button in top right */}
         <button
-          onClick={(e) => {
-            e.stopPropagation(); // Prevent tap registration
-            resetTapMode();
-          }}
-          className="absolute top-4 right-4 w-12 h-12 rounded-full border border-red-500/30 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-red-500/50 active:transform active:scale-95 z-10"
+          onClick={handleResetTap}
+          className="absolute top-4 right-4 w-12 h-12 rounded-full border border-red-500/30 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-red-500/50 active:transform active:scale-95 z-20"
           aria-label="Reset counter"
         >
           <RotateCcw className="w-5 h-5 text-red-500" />
         </button>
         
-        {/* Add button in bottom right */}
+        {/* Add button - moved higher and changed to white color */}
         {tapBpm && tapBpm > 0 && (
           <button
             onClick={handleSaveTappedBpm}
-            className="absolute bottom-4 right-4 w-16 h-16 rounded-full border border-green-500/30 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-green-500/50 active:transform active:scale-95 z-10"
+            className="absolute bottom-24 right-4 w-16 h-16 rounded-full border border-white/30 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/50 active:transform active:scale-95 z-20 no-tap"
             aria-label="Add to recordings"
           >
-            <PlusCircle className="w-8 h-8 text-green-500" />
+            <PlusCircle className="w-8 h-8 text-white" />
           </button>
         )}
         
         {/* BPM instructional text */}
         <p className={`${tapFlash ? 'text-black' : 'text-white'} text-lg opacity-60 absolute top-20 z-10`}>tap or click any key to get bpm</p>
         
-        {/* BPM Display */}
-        <div className="flex flex-col items-center justify-center flex-1 z-10 select-none">
-          <div className={`text-[180px] font-bold leading-none transition-all transform select-none ${
+        {/* BPM Display - improved responsiveness */}
+        <div className="flex flex-col items-center justify-center flex-1 z-10 select-none w-full max-w-4xl px-4">
+          <div className={`text-[24vw] md:text-[220px] font-bold leading-none transition-all transform select-none ${
             tapFlash ? 'scale-110 text-black' : 'scale-100 text-white'
           }`}>
             {bpmDisplay}
           </div>
-          <div className={`text-center text-6xl mt-2 font-semibold transition-colors select-none ${
+          <div className={`text-center text-5xl md:text-7xl mt-2 font-semibold transition-colors select-none ${
             tapFlash ? 'text-black' : 'text-white'
           }`}>
             BPM
@@ -660,8 +852,8 @@ export default function BpmCounter() {
         
         <div className="flex space-x-2 relative">
           <button
-            onClick={() => router.push('/recordings')}
-            className="w-12 h-12 rounded-full border border-white/10 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95"
+            onClick={handleNavigateToRecordings}
+            className="w-12 h-12 rounded-full border border-white/10 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95 z-20"
           >
             <ListMusic className="w-5 h-5 text-white/90" />
           </button>
@@ -697,32 +889,6 @@ export default function BpmCounter() {
           isAnalyzing={isAnalyzing}
           rawBpm={rawBpm}
         />
-        
-        {/* Status indicator */}
-        {isRecording && (
-          <div
-            className="text-white text-xs"
-            style={{
-              opacity: 0.7,
-              marginTop: "8px",
-              textAlign: "center",
-              backgroundColor: "rgba(0, 0, 0, 0.3)",
-              padding: "4px 8px",
-              borderRadius: "4px",
-              display: "inline-block",
-              position: "absolute",
-              left: "50%",
-              transform: "translateX(-50%)",
-              fontWeight: "bold"
-            }}
-          >
-            {isAnalyzing 
-              ? "" 
-              : rawBpm 
-                ? `` 
-                : ""}
-          </div>
-        )}
       </div>
       
       <div className="w-full h-40 mb-2 relative">
@@ -756,9 +922,7 @@ export default function BpmCounter() {
       </div>
 
       <div className="text-gray-500 text-xs mt-4 text-center">
-        {isRecording && isAnalyzing 
-          ? "Analyzing audio..." 
-          : "Tap to record up to 1 minute"}
+        Tap to record up to 1 minute
       </div>
 
       {showSaveDialog && (

@@ -89,7 +89,13 @@ export const useAudioRecorder = () => {
       
       // Get audio stream
       console.log('[Audio Recorder] Requesting microphone permissions...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
       console.log('[Audio Recorder] Microphone access granted');
       streamRef.current = stream;
       
@@ -109,8 +115,11 @@ export const useAudioRecorder = () => {
         console.log('[Audio Recorder] Audio processing chain setup complete');
         console.log(`[Audio Recorder] Configuration: fftSize=${analyserRef.current.fftSize}, sampleRate=${audioContextRef.current.sampleRate}`);
         
-        // Create media recorder
-        const mediaRecorder = new MediaRecorder(stream);
+        // Create media recorder with improved settings for better audio quality but smaller size
+        const mediaRecorder = new MediaRecorder(stream, {
+          mimeType: 'audio/webm;codecs=opus',
+          audioBitsPerSecond: 32000 // Lower bitrate for smaller file size
+        });
         mediaRecorderRef.current = mediaRecorder;
         
         mediaRecorder.ondataavailable = (event) => {
@@ -152,6 +161,15 @@ export const useAudioRecorder = () => {
       sourceNodeRef.current = null;
     }
     
+    // Process the recorded audio to create the audio blob
+    const recordedBlob = new Blob(audioChunksRef.current, { 
+      type: 'audio/webm;codecs=opus' 
+    });
+    setAudioBlob(recordedBlob);
+    
+    // Log the final recording size
+    console.log(`[Audio Recorder] Recording complete: ${Math.round(recordedBlob.size/1024)}KB`);
+    
     setIsRecording(false);
   };
 
@@ -159,6 +177,7 @@ export const useAudioRecorder = () => {
     setRecordingTime(0);
     setAudioData(null);
     audioChunksRef.current = [];
+    setAudioBlob(null);
     
     if (sourceNodeRef.current) {
       sourceNodeRef.current.disconnect();
@@ -181,7 +200,7 @@ export const useAudioRecorder = () => {
     audioContext: audioContextRef.current,
     analyser: analyserRef.current,
     audioBlob: audioChunksRef.current.length > 0 
-      ? new Blob(audioChunksRef.current, { type: 'audio/webm' }) 
+      ? new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' }) 
       : null
   };
 };

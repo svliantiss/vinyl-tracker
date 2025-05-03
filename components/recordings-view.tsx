@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import { Home, Trash2, Plus, Disc, Play, Pause } from 'lucide-react';
 import { getAllRecordings, deleteRecording, type Recording } from '@/lib/db';
 
@@ -17,8 +16,12 @@ const DEFAULT_COLORS = [
   'bg-orange-400',
 ];
 
-export default function RecordingsPage() {
-  const router = useRouter();
+interface RecordingsViewProps {
+  onBack: () => void;
+  onNewRecording: () => void;
+}
+
+export default function RecordingsView({ onBack, onNewRecording }: RecordingsViewProps) {
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -118,13 +121,20 @@ export default function RecordingsPage() {
     setPlayingId(null);
   };
 
+  // Make sure to stop playback when navigating away
+  useEffect(() => {
+    return () => {
+      stopPlayback();
+    };
+  }, []);
+
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="fixed inset-0 bg-black text-white overflow-auto z-50">
       <div className="fixed top-0 left-0 right-0 flex items-center justify-between bg-black/80 backdrop-blur-md p-4 z-10">
         <button
-          onClick={() => router.push('/')}
+          onClick={onBack}
           className="w-12 h-12 rounded-full border border-white/10 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95"
-          aria-label="Home"
+          aria-label="Back"
         >
           <Home className="w-5 h-5 text-white/90" />
         </button>
@@ -137,7 +147,7 @@ export default function RecordingsPage() {
           {/* Empty create new card */}
           <div 
             className="aspect-square rounded-2xl border-2 border-dashed border-gray-700 flex flex-col items-center justify-center cursor-pointer hover:border-gray-500 transition-colors"
-            onClick={() => router.push('/')}
+            onClick={onNewRecording}
           >
             <Plus className="w-8 h-8 text-gray-500 mb-2" />
             <span className="text-gray-500">New Recording</span>
@@ -250,4 +260,4 @@ export default function RecordingsPage() {
       </div>
     </div>
   );
-}
+} 

@@ -1,8 +1,20 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createRealTimeBpmProcessor, getBiquadFilter } from 'realtime-bpm-analyzer';
-import { X, Mic, Pause, Play, Home } from 'lucide-react';
+import { X, Mic, Pause, Play, Home, RotateCcw, PlusCircle } from 'lucide-react';
+
+// Get colors from BpmCounter
+const TAP_COLORS = [
+  'bg-purple-400',
+  'bg-blue-400',
+  'bg-green-400', 
+  'bg-yellow-400',
+  'bg-red-400',
+  'bg-indigo-400',
+  'bg-pink-400',
+  'bg-orange-400',
+];
 
 interface LiveBPMProps {
   onClose: () => void;
@@ -16,6 +28,10 @@ export default function LiveBPM({ onClose, onBpmDetected }: LiveBPMProps) {
   const [status, setStatus] = useState<'idle' | 'listening' | 'analyzing' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showDecimals, setShowDecimals] = useState(false);
+  const [tapFlash, setTapFlash] = useState(false);
+  const [tapColor, setTapColor] = useState('');
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const timeRef = useRef<NodeJS.Timeout | null>(null);
   
   // Setup refs
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -24,10 +40,24 @@ export default function LiveBPM({ onClose, onBpmDetected }: LiveBPMProps) {
   const streamRef = useRef<MediaStream | null>(null);
   const lowpassRef = useRef<BiquadFilterNode | null>(null);
   
+  // Reset function
+  const resetAnalysis = useCallback(() => {
+    setDetectedBpm(null);
+    setStableBpm(null);
+    setElapsedTime(0);
+    
+    // Restart audio analyzer if currently listening
+    if (isListening) {
+      stopListening();
+      setupAudio();
+    }
+  }, [isListening]);
+  
   // Setup audio context and analyzer
   const setupAudio = async () => {
     try {
       setStatus('analyzing');
+      setElapsedTime(0);
       
       // Create audio context if not exist
       if (!audioContextRef.current) {
@@ -45,7 +75,7 @@ export default function LiveBPM({ onClose, onBpmDetected }: LiveBPMProps) {
       // Create analyzer node with realtime-bpm-analyzer
       const analyzerNode = await createRealTimeBpmProcessor(audioContextRef.current, {
         continuousAnalysis: true, // Keep analyzing
-        stabilizationTime: 15000, // Reset after 15 seconds to avoid memory issues
+        stabilizationTime: 20000, // 20 seconds for stable BPM (as per requirement)
       });
       analyzerNodeRef.current = analyzerNode;
       
@@ -61,14 +91,25 @@ export default function LiveBPM({ onClose, onBpmDetected }: LiveBPMProps) {
         if (event.data.message === 'BPM') {
           const bpm = event.data.data.bpm;
           setDetectedBpm(bpm);
+          
+          // Create flash effect on beat detection (like manual tap page)
+          triggerFlash();
         }
         
         if (event.data.message === 'BPM_STABLE') {
           const bpm = event.data.data.bpm;
           setStableBpm(bpm);
-          onBpmDetected(bpm);
         }
       };
+      
+      // Start timer for elapsed time
+      if (timeRef.current) {
+        clearInterval(timeRef.current);
+      }
+      
+      timeRef.current = setInterval(() => {
+        setElapsedTime(prev => prev + 1);
+      }, 1000);
       
       setStatus('listening');
       setIsListening(true);
@@ -106,58 +147,118 @@ export default function LiveBPM({ onClose, onBpmDetected }: LiveBPMProps) {
       streamRef.current = null;
     }
     
-    // Close audio context
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(console.error);
+    // Stop timer
+    if (timeRef.current) {
+      clearInterval(timeRef.current);
+      timeRef.current = null;
     }
     
     setIsListening(false);
     setStatus('idle');
   };
   
-  // Format BPM for display
-  const formatBpm = (value: number | null): string => {
-    if (value === null) return "--";
-    return showDecimals ? value.toFixed(1) : Math.round(value).toString();
+  // Format BPM for display with decimal control
+  const bpmDisplay = useMemo(() => {
+    const bpmValue = stableBpm || detectedBpm;
+    if (bpmValue === null) return "--";
+    return showDecimals ? bpmValue.toFixed(2) : Math.round(bpmValue).toString();
+  }, [detectedBpm, stableBpm, showDecimals]);
+  
+  // Trigger color flash effect (like in manual tap)
+  const triggerFlash = () => {
+    const randomColor = TAP_COLORS[Math.floor(Math.random() * TAP_COLORS.length)];
+    setTapColor(randomColor);
+    setTapFlash(true);
+    
+    // Reset flash after animation completes
+    setTimeout(() => {
+      setTapFlash(false);
+    }, 300);
   };
+  
+  // Save detected BPM handler
+  const handleSaveBpm = useCallback(() => {
+    const bpmValue = stableBpm || detectedBpm;
+    if (bpmValue) {
+      // Handle BPM differently based on decimal mode
+      if (showDecimals) {
+        // Save with decimals
+        onBpmDetected(parseFloat(bpmValue.toFixed(2)));
+      } else {
+        // Save without decimals
+        onBpmDetected(Math.round(bpmValue));
+      }
+    }
+  }, [stableBpm, detectedBpm, showDecimals, onBpmDetected]);
+  
+  // Toggle decimal display
+  const toggleDecimals = useCallback(() => {
+    setShowDecimals(prev => !prev);
+  }, []);
   
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopListening();
+      if (timeRef.current) {
+        clearInterval(timeRef.current);
+      }
     };
   }, []);
   
   return (
-    <div className="fixed inset-0 bg-black flex flex-col items-center justify-center z-50">
+    <div 
+      className={`fixed inset-0 flex flex-col items-center justify-center z-50 transition-colors duration-300 ${
+        tapFlash ? tapColor : 'bg-black'
+      }`}
+    >
       {/* Back button */}
       <button
         onClick={onClose}
-        className="absolute top-4 left-4 w-12 h-12 rounded-full border border-white/10 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20"
+        className="absolute top-4 left-4 w-12 h-12 rounded-full border border-white/10 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95 z-20"
+        aria-label="Back to home"
       >
         <Home className="w-5 h-5 text-white/90" />
       </button>
 
-      {/* Decimal toggle button */}
+      {/* Decimal toggle button - styled like manual tap page */}
       <button
-        onClick={() => setShowDecimals(!showDecimals)}
-        className="absolute top-4 right-4 w-12 h-12 rounded-full border border-white/10 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95 z-10"
+        onClick={toggleDecimals}
+        className={`absolute top-4 right-20 w-12 h-12 rounded-full border ${showDecimals ? 'border-orange-400' : 'border-white/10'} flex items-center justify-center ${showDecimals ? 'bg-orange-400/10' : 'bg-gray-900/30'} backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/20 active:transform active:scale-95 z-20`}
         aria-label="Toggle decimals"
       >
-        <span className="text-white/90 font-mono font-bold text-base">.00</span>
+        <span className={`font-mono font-bold text-base ${showDecimals ? 'text-orange-400' : 'text-white/90'}`}>.00</span>
       </button>
       
-      {/* Instruction message at top */}
-      <p className="text-white/60 text-lg absolute top-20">
-        tap or click any key to get bpm
-      </p>
+      {/* Reset button */}
+      <button
+        onClick={resetAnalysis}
+        className="absolute top-4 right-4 w-12 h-12 rounded-full border border-red-500/30 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-red-500/50 active:transform active:scale-95 z-20"
+        aria-label="Reset analysis"
+      >
+        <RotateCcw className="w-5 h-5 text-red-500" />
+      </button>
       
-      {/* BPM Display */}
-      <div className="flex flex-col items-center justify-center flex-1">
-        <div className="text-[180px] font-bold leading-none text-white">
-          {formatBpm(stableBpm || detectedBpm)}
+      {/* Instruction message at top - including the 20 second note */}
+      <div className="absolute top-20 text-center">
+        <p className={`${tapFlash ? 'text-black' : 'text-white'} text-lg opacity-60`}>
+          listening for beats...
+        </p>
+        <p className={`${tapFlash ? 'text-black' : 'text-white'} text-sm opacity-40 mt-1`}>
+          requires at least 20 seconds for accurate detection
+        </p>
+      </div>
+      
+      {/* BPM Display - same styling as manual tap */}
+      <div className="flex flex-col items-center justify-center flex-1 z-10 select-none w-full max-w-4xl px-4">
+        <div className={`text-[24vw] md:text-[220px] font-bold leading-none transition-all transform select-none ${
+          tapFlash ? 'scale-110 text-black' : 'scale-100 text-white'
+        }`}>
+          {bpmDisplay}
         </div>
-        <div className="text-center text-6xl mt-2 font-semibold text-white/70">
+        <div className={`text-center text-5xl md:text-7xl mt-2 font-semibold transition-colors select-none ${
+          tapFlash ? 'text-black' : 'text-white'
+        }`}>
           BPM
         </div>
         
@@ -167,26 +268,42 @@ export default function LiveBPM({ onClose, onBpmDetected }: LiveBPMProps) {
             <p className="text-red-200/80 text-sm mt-1">{errorMessage}</p>
           </div>
         )}
+        
+        {/* Timer display */}
+        <div className={`mt-4 text-xl ${tapFlash ? 'text-black/70' : 'text-white/70'}`}>
+          {Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}
+        </div>
       </div>
       
       {/* Controls */}
-      <div className="absolute bottom-20 flex gap-4">
+      <div className="absolute bottom-24 flex gap-4">
         {!isListening ? (
           <button
             onClick={setupAudio}
-            className="w-16 h-16 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center"
+            className="w-16 h-16 rounded-full bg-green-500/80 backdrop-blur-md hover:bg-green-600 flex items-center justify-center"
           >
             <Mic className="w-6 h-6 text-white" />
           </button>
         ) : (
           <button
             onClick={stopListening}
-            className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center"
+            className="w-16 h-16 rounded-full bg-red-500/80 backdrop-blur-md hover:bg-red-600 flex items-center justify-center"
           >
             <Pause className="w-6 h-6 text-white" />
           </button>
         )}
       </div>
+      
+      {/* Save button - shown only when BPM is detected */}
+      {(stableBpm || detectedBpm) && (
+        <button
+          onClick={handleSaveBpm}
+          className="absolute bottom-24 right-4 w-16 h-16 rounded-full border border-white/30 flex items-center justify-center bg-gray-900/30 backdrop-blur-md transition-all hover:bg-gray-800/50 hover:border-white/50 active:transform active:scale-95 z-20"
+          aria-label="Save detected BPM"
+        >
+          <PlusCircle className="w-8 h-8 text-white" />
+        </button>
+      )}
     </div>
   );
 } 
